@@ -1,10 +1,21 @@
-clear all;
+clear variables
+close all
+
+% algorithms to be tested
+names = {'ista'; 'fista'} ;
 
 % file names.
 img_name = 'cameraman';
 filename = strcat(img_name, '.jpg');
-matfile = strcat('A_',img_name, '.mat');
-eigfile = strcat('A_eigens_', img_name, '.mat');
+mat_file = strcat('A_',img_name, '.mat');
+eig_file = strcat('A_eigens_', img_name, '.mat');
+
+% init array struct with response parameters of run methods
+header = {'name' 'elapsed' 'niter' 'tol' 'ndiff' 'normr' 'normb' 'norme'};
+resp=cell(length(names),length(header));
+
+% 2-D line plot of the optimization values in Y versus iterations.
+display_plots = true;  % plot_results = 0; don't plot anything
 
 % load image
 img = im2double(imread(filename));
@@ -12,148 +23,90 @@ img = im2double(imread(filename));
 % vectorize true image
 x = img(:);
 
-% get blur kernel (gaussian) of window size nine and sigma 4.0
-h = gaussian_kernel(9,4);
+% gaussian blurring kernel (gaussian)
+h = gaussian_kernel(9,4); % window size nine and sigma 4.0
 
-% linear operator
+% Blurred linear operator
 tic; fprintf('Getting linear operator ... ')
-if exist(matfile, 'file') == 2
-    S = load(matfile,'A');
-    A = S.A;
+if exist('A.mat', 'file') == 2
+    load('A.mat')
 else
-    A = blur_optimize(h,img);
-    save(matfile,'A');
+    A = blur_operator(h,img);
 end
 elapsed=toc; fprintf('elapsed %f\n', elapsed)
 
+%*******************************************************************
+% Local functions declaration.
+%*******************************************************************
+% calculate matrices
+A_transpose = A';
+A_square = A' * A;
 
-% maximum eigen value
-tic; fprintf('Computing eigenvalues ... ')
-if exist(eigfile, 'file') == 2
-    E = load(eigfile);
-    A_square_eigs = E.A_square_eigs;
-else
-    A_square_eigs = eigs(A_square) ;
-    save(eigfile,'A_square_eigs');
-end
-L = max(A_square_eigs);
-elapsed = toc; fprintf('elapsed %f\n', elapsed)
+% gradient
+grad_fx = @(x) (A_square * x - A_transpose * b);
 
 % blurring the image
-tic; fprintf('Blurring image ... ')
+tic; fprintf('Blurring image          ... ')
 b = A * x;
 elapsed=toc; fprintf('elapsed %f\n', elapsed)
 
-% objective function
-f_obj = @(A, x, b, lambda) norm(b-A*x)^2 + lambda*sum(abs(x));
+% init with blurred image
+x_0 = b;  
 
-% parameters for ISTA 
-x_0 = b;  % init with blurred image
-step = 1 / L;
-lambda = 2e-5;
-maxiter = 1000;
+% maximum Eigen value
+tic; fprintf('Computing eigenvalues   ... ')
+if exist('Aeigs.mat', 'file') == 2
+    load('Aeigs.mat')
+else
+    Aeigs = eigs(A' * A);
+end
+L = max(Aeigs);
+elapsed = toc; fprintf('elapsed %f\n', elapsed)
 
-step = step * 0.5;
-[x_ista, f_ista] = ista(A, b, x_0, step, lambda, maxiter, f_obj);
+% general algorithm parameters 
+opts.step = 1 / L; 
+opts.lambda = 2e-5; 
+opts.maxiter = 3000; 
+opts.tol = 1e-6;
+opts.verbose = true;
 
-[x_fista, f_fista] = fista(A, b, x_0, step, lambda, maxiter, f_obj);
+% global configurations
+opts.step = opts.step * 0.5;
 
-%step = lambda;
-%[x_grad, f_grad] = gradient_descent(A, b, x_0, step, lambda, maxiter, f_obj);
+% initialize array to save function outcome
+costs  = zeros(length(names), opts.maxiter) ;
 
-fx_min = f_obj(A,x,b,lambda);
-figure(1);
-semilogx(f_ista); hold on;
-semilogx(f_fista); 
-%semilogx(f_grad);
-hold off;
+% run algorithms
+for i=1:length(names)
+switch names{i}
+    case 'ista'
 
-ylabel('${f(x_k)-f(x^{*})}$','interpreter','latex', 'FontWeight','bold')
-xlabel('${k}$','interpreter','latex', 'FontWeight','bold')
-title('Algoritmos Gradiente-Proximal','interpreter','latex', 'FontWeight','bold')
-legend({'ISTA','FISTA'},'Location','northeast')
-grid on;
+        [costs(i,:), x_mid, x_k, resp(i,:)]  = ista(A, b, x, x_0, opts);
+        
+    case 'fista'
 
-figure(2); 
-loglog(f_ista); hold on;
-loglog(f_fista); 
-%loglog(f_grad);
-hold off;
-ylabel('${f(x_k)-f(x^{*})}$','interpreter','latex', 'FontWeight','bold')
-xlabel('${k}$','interpreter','latex', 'FontWeight','bold')
-title('Algoritmos Gradiente-Proximal','interpreter','latex', 'FontWeight','bold')
-legend({'ISTA','FISTA'},'Location','northeast')
-grid on;
+        [costs(i,:), x_mid, x_k, resp(i,:)]  = fista(A, b, x, x_0, opts);
 
-figure(3);
-vals_ista = f_ista-fx_min ;
-vals_fista = f_fista-fx_min ;
-%vals_grad = f_grad-fx_min ;
-semilogx(vals_ista(vals_ista>0)); hold on;
-semilogx(vals_fista(vals_fista>0)); 
-%semilogx(vals_grad(vals_grad>0));
-hold off;
-ylabel('${f(x_k)-f(x^{*})}$','interpreter','latex', 'FontWeight','bold')
-xlabel('${k}$','interpreter','latex', 'FontWeight','bold')
-title('Algoritmos Gradiente-Proximal','interpreter','latex', 'FontWeight','bold')
-legend({'ISTA','FISTA'},'Location','northeast')
-grid on;
+end
+end
 
-figure(4);
-loglog(vals_ista(vals_ista>0)); hold on;
-loglog(vals_fista(vals_fista>0)); 
-%loglog(vals_grad(vals_grad>0)); 
-hold off;
-ylabel('${f(x_k)-f(x^{*})}$','interpreter','latex', 'FontWeight','bold')
-xlabel('${k}$','interpreter','latex', 'FontWeight','bold')
-title('Algoritmos Gradiente-Proximal','interpreter','latex', 'FontWeight','bold')
-legend({'ISTA','FISTA'},'Location','northeast')
-grid on;
 
-figure(5);
-semilogx(f_ista(1:end-1)-f_ista(2:end)); hold on;
-semilogx(f_fista(1:end-1)-f_fista(2:end)); 
-%semilogx(f_grad(1:end-1)-f_grad(2:end));
-hold off;
-ylabel('${f(x_k)-f(x^{*})}$','interpreter','latex', 'FontWeight','bold')
-xlabel('${k}$','interpreter','latex', 'FontWeight','bold')
-title('Algoritmos Gradiente-Proximal','interpreter','latex', 'FontWeight','bold')
-legend({'ISTA','FISTA'},'Location','northeast')
-grid on;
+% Short scientific notation with 4 digits after the decimal point.
+format shortE 
 
-% % reshape the blurred image
-img_blurred = reshape(b,size(img)); 
-img_ista    = reshape(x_ista,size(img));
-img_fista   = reshape(x_fista,size(img));
-% 
-% % Display images
-% figure(6); imshow(im2uint8(img_blurred)); title('Blurred');
-% figure(7); imshow(im2uint8(img_ista));title('ISTA');
-% figure(8); imshow(im2uint8(img_fista));title('FISTA');
-% 
-% figure(4)
-% plot(fopt(fopt>0));
-iptsetpref('ImshowBorder','tight');
-figure(6);
-subplot(1,3,1), imshow(im2uint8(img_blurred)); title('Blurred');
-subplot(1,3,2), imshow(im2uint8(img_ista));title('ISTA');
-subplot(1,3,3), imshow(im2uint8(img_fista));title('FISTA');
-%tightfig;
-%spaceplots([0 0 0 0], [.02 .02]);
-%set(gca, 'LooseInset', get(gca,'TightInset'))
-% F= getframe(f);
-% img1 = F.cdata;
-% imwrite(img1, 'test.jpg');
+% display summary table 
+disp(cell2table(resp, 'VariableNames',header))
 
-% %Matlab runs a script called ?startup.m? when it starts. This is located in your ~/matlab/ 
-% %remove the gray border
-% iptsetpref('ImshowBorder','tight');
-% %removes menu and toolbar from all new figures
-% set(0,'DefaultFigureMenu','none');
-% %makes disp() calls show things without empty lines
-% format compact;
-% set(0,'Default');
-Fvalues=[f_ista-fx_min; f_fista-fx_min];
-Xvalues=[x_ista; x_fista];
-save('Fvalues.mat','Fvalues');
-save('Xvalues.mat','Xvalues');
+
+if display_plots
+    
+    % plotting results
+    plot_results(lasso_function(A,x,b,opts.lambda),names, 'log', costs);
+        
+end
+
+
+% saving useful files
+save('A','A');
+save('Aeigs','Aeigs');
+
