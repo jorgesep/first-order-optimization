@@ -1,4 +1,4 @@
-function [ fx_vals, x_100, x_next, resp ] = fista( A, b, x_true, x_0, opts )
+function [ fx_k, x_100, y_next, resp ] = fista( A, b, x_true, x_0, opts )
 % Particulat implementation of FISTA algorithm
 
 % set default parameters in case no given arguments.
@@ -14,41 +14,37 @@ fprintf('=====================================================\n')
 fprintf(' FISTA: Fast Iterative Shrinkage-Thresholding Algorithm\n')
 fprintf('=====================================================\n')
 fprintf(' Algorithm parameters:\n')
-fprintf([' lambda: %1.3e\n',...
-         ' step  : %1.3e\n'],...
+fprintf([' lambda: %1.3f\n',...
+         ' step  : %1.3f\n'],...
           lambda, h);
-%fprintf('=====================================================\n')
 
 % get matrices
 A_transpose = A';
 A_square = A' * A;
 
+% gradient
+grad_fx = @(x) (A_square * x - A_transpose * b);
 
 % compute ||b|| only once
 normb = norm(b);
 
 % initialize arrays 
-fista_errors = zeros(4,maxiter);    % criteria errors
-fx_vals = zeros(1,maxiter); % objective function values
+fx_k = zeros(1,maxiter); % objective function values
+x1x2 = zeros(2, maxiter) ; ix1=29630; ix2=29379;
 
 % initialize algorithm variables
 x_k = x_0; y_k = x_0; t_k = 1; niter = 0; ndiff = inf;
 
-% init function value
-fx_k = lasso_function(A,x_k,b,lambda);
-
-% true value of the objective function
-value = lasso_function(A,x_true,b,lambda);
 
 tic;
 % main loop
 while and(ndiff>=tol, niter < maxiter)
     
     % gradient step
-    x_grad = y_k - 2 * h .* (A_square * y_k - A_transpose* b);
+    x_grad = y_k - 2 * h .* grad_fx(y_k);
     
     % soft thresholding
-    x_next = subplus(abs(x_grad) - lambda * h) .* sign(x_grad);
+    x_next = prox_l1(x_grad,lambda * h);
 
     % intermediate t step
     t_next = 0.5 * ( 1 + sqrt(1 + 4*t_k^2) );
@@ -56,58 +52,67 @@ while and(ndiff>=tol, niter < maxiter)
     % FISTA update
     y_next = x_next + ((t_k - 1)/t_next) * (x_next - x_k);
 
+    % update counter
+    niter = niter + 1;
+    
     % function value for current iteration
-    cost = lasso_function(A,y_next,b,lambda);
-   
-    residual = b - A*y_k;             % Compute residual with previous x
-    normr = norm(residual);           % Save for printing
-    if normr/normb < tol, break; end  % Test before solving; exit loop if true
-        
+    fx_k(niter) = lasso_function(A,y_next,b,lambda);
+
     % error for stoppping criteria 
-    fista_errors(1,niter+1) = norm(y_next - y_k)     /norm(y_k);
-    fista_errors(2,niter+1) = norm(y_next - y_k,1)   /numel(y_k);
-    fista_errors(3,niter+1) = norm(y_next - x_true,1)/norm(x_true,1);
-    fista_errors(4,niter+1) = normr/normb ; 
+    ndiff = get_stop_criteria_val('norm2');
+
+    % update
+    x_k = x_next ; y_k = y_next ; t_k = t_next ;
+
+    % save optimization value at iteration 100
+    if niter == 100, x_100 = y_next; end
     
     % display messages every 10 iterations.
-    if and(mod(niter,10) == 0, verbose  )
-        fprintf('%d cost = %.5s error = %1.6e\n', niter, cost, fista_errors(1,niter+1));
-%         fprintf(['%d fx=[%.3e:%.3e:%3e:%3e] error=[%.3e:%.3e:%.3e] ', ...
-%             'residual=[%1.3e:%1.3e:%1.3e]\n'], ...
-%             niter, fx_next, (fx_k-fx_next), ...
-%             (fx_next-value), (fx_next-value)/value, ...
-%             fista_errors(1,niter+1),fista_errors(2,niter+1), ...
-%             fista_errors(3,niter+1), ...
-%             normr, normr/normb,tol);
+    if and(mod(niter-1,10) == 0, verbose  )
+        fprintf('%d cost = %.5s error = %1.6e\n', niter, fx_k(niter), errors(1,niter));
     end
+    % show progress
+    progressbar( maxiter, niter, verbose )
     
-    % update function vals 
-    fx_k = cost;
-    fx_vals(niter+1) = fx_k;
-    ndiff = fista_errors(1,niter+1);    
+end
+fprintf('\n');
+
+
     
-    % update
-    x_k = x_next ;
-    y_k = y_next ;
-    t_k = t_next ;
-    niter = niter + 1;    
-    
-    
-    % save optimization value at iteration 100
-    if niter == 100 
-        x_100 = x_next;
+% save all in a cell
+resp = { 'fista' toc niter lambda h tol ndiff  errors(2,end) };
+
+nameStr = mfilename;
+if ~exist(nameStr, 'dir'), mkdir(nameStr); end
+save(strcat(nameStr,'/errors'),'errors');
+save(strcat(nameStr,'/x1x2'),'x1x2');
+
+% local function to save in an array different versions error stop criteria
+function e = get_stop_criteria_val(type)
+    % create array
+    if niter == 1 
+        errors = zeros(4,maxiter);    % array for keep criteria errors
+    end
+    e_1 = norm(y_next-y_k)/norm(y_k);
+    e_2 = norm(y_next-y_k,1)/numel(y_k);
+    e_3 = norm(y_next-x_true,1)/norm(x_true,1);
+    e_4  = norm(b - A*y_k)/normb;
+    errors([1 2 3 4],niter) = [e_1 e_2 e_3 e_4];
+
+    x1x2([1 2],niter) = y_next([ix1 ix2]);
+    switch type
+        case 'norm2'
+            e = errors(1,niter);
+        case 'norm1'
+            e = errors(2,niter);
+        case 'xtrue'
+            e = errors(3,niter);
+        case 'residual'
+            e = errors(4,niter);
+        otherwise
+            e = inf;
     end
 
 end
-
-% save on a struct all main algorithm parameters
-% resp.name = 'fista';
-% resp.elapsed = toc;
-% resp.niter = niter; resp.tol = tol; resp.ndiff = ndiff;
-% resp.normr = normr; resp.normb = normb; resp.norme = normr/normb;
-resp = { 'fista' toc niter tol ndiff normr normb normr/normb };
-
-save('fista_errors','fista_errors');
-
 end
 
