@@ -15,13 +15,16 @@ fprintf('=====================================================\n')
 fprintf(' ISTA: Iterative Shrinkage-Thresholding Algorithm\n')
 fprintf('=====================================================\n')
 fprintf(' Algorithm parameters:\n')
-fprintf([' lambda: %1.3e ',...
-         ' step  : %1.3e\n'],...
+fprintf([' lambda: %1.3f\n',...
+         ' step  : %1.3f\n'],...
           lambda, t_k);
 
 % get matrices
 A_transpose = A';
 A_square = A' * A;
+
+% gradient
+grad_fx = @(x) (A_square * x - A_transpose * b);
 
 % compute ||b|| only once
 normb = norm(b); 
@@ -44,13 +47,16 @@ tic;
 while and(ndiff>=tol, niter < maxiter)
 
     % gradient step
-    x_grad = x_k - 2 * t_k .* (A_square * x_k - A_transpose* b);
-    
+    %x_grad = x_k - 2 * t_k .* (A_square * x_k - A_transpose* b);
+    x_grad = x_k - 2 * t_k .* grad_fx(x_k);
+
     % soft thresholding
-    x_next = subplus(abs(x_grad) - lambda * t_k) .* sign(x_grad);
+    %x_next = subplus(abs(x_grad) - lambda * t_k) .* sign(x_grad);
+    x_next = prox_l1(x_grad,lambda * t_k);
+
     
     % function value for current iteration
-    fx_next = lasso_function(A,x_next,b,lambda);
+    cost = lasso_function(A,x_next,b,lambda);
     
     % norm of the residual using x_k
     normr = norm(b - A*x_k);           % Save for printing
@@ -64,16 +70,11 @@ while and(ndiff>=tol, niter < maxiter)
     
     % display by console every 50 iterations
     if and(mod(niter,10) == 0, verbose )
-        fprintf(['%d fx=[%.3e:%.3e:%3e:%3e] error=[%.3e:%.3e:%.3e] ',...
-                 'residual=[%1.3e:%1.3e:%11.3e]\n'], ...
-            niter, fx_next, (fx_k-fx_next), ...
-            (fx_next-fx_star), (fx_next-fx_star)/fx_star, ...
-            ista_errors(1,niter+1),ista_errors(2,niter+1), ...
-            ista_errors(3,niter+1), normr, normr/normb,tol );
+        fprintf('%d cost = %.5s error = %1.6e\n', niter, cost, ista_errors(1,niter+1));
     end
     
     % update function vals 
-    fx_k = fx_next;
+    fx_k = cost;
     fx_vals(niter+1) = fx_k;
     ndiff = ista_errors(1,niter+1);
 
@@ -84,6 +85,10 @@ while and(ndiff>=tol, niter < maxiter)
     % Save vector of iteration 100
     if niter == 100 
         x_100 = x_next;
+    end
+    
+    if and(mod(niter,floor(maxiter*0.02)) == 0, ~verbose )
+        fprintf('.');
     end
 
 end
