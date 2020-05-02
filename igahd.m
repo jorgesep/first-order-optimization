@@ -1,190 +1,99 @@
-%*******************************************************************
-% IGAHD-NS: Inertial Gradient Algorithm with Hessian Damping
-%*******************************************************************
+function [ fx_k, x_100, x_next, resp ] = igahd( grad_fx, cost_fx, x_0, opts )
+% IPAHD-NS: Inertial Gradient Algorithm with Hessian Damping
 
-
-clear;
-
-
-%%
-%*******************************************************************
-% Initial configurations
-%*******************************************************************
-fprintf('=====================================================\n')
-fprintf(' IGAHD: Inertial Gradient Algorithm \n')
-fprintf('           with Hessian Damping\n')
-fprintf('=====================================================\n')
-
-% name of files.
-img_name = 'cameraman';
-filename = strcat(img_name, '.jpg');
-matfile = strcat('A_',img_name, '.mat');
-eigfile = strcat('A_eigens_',img_name, '.mat');
-
-% load image
-img = im2double(imread(filename));
-
-% vectorize true image
-x = img(:);
-
-% get blur kernel (gaussian) of window size 9 and sigma 1.5
-h = gaussian_kernel(9,4);
-
-% linear operator
-tic; fprintf('Getting linear operator ... ')
-if exist(matfile, 'file') == 2
-    S = load(matfile,'A');
-    A = S.A;
-else
-    A = blur_optimize(h,img);
-    save(matfile,'A');
-end
-elapsed=toc; fprintf('elapsed %f\n', elapsed)
-
-% transpose and square A matrix
-tic; fprintf('Computing A_transpose times A ... ')
-A_transpose = A';
-A_square = A_transpose * A;
-elapsed = toc; fprintf('elapsed %f\n', elapsed)
-
-% step size (h) from maximum of eigen values
-tic; fprintf('Computing eigenvalues ... ')
-
-if exist(eigfile, 'file') == 2
-    E = load(eigfile);
-    A_square_eigs = E.A_square_eigs;
-else
-    A_square_eigs = eigs(A_square) ;
-    save(eigfile,'A_square_eigs');
-end
-L = max(A_square_eigs);
-step_size = 1 / L;
-elapsed = toc; fprintf('elapsed %f\n', elapsed)
-
-% blurring the image
-tic; fprintf('Blurring image ... ')
-b = A * x;
-[brows, bcols] = size(b);
-elapsed=toc; fprintf('elapsed %f\n', elapsed)
-
-%%
-%*******************************************************************
-% Local functions declaration.
-%*******************************************************************
-
-% objective function
-f_obj = @(A, x, b, lambda) norm(A*x-b)^2 + lambda*sum(abs(x));
-
-
-% Soft-thresholding/shrinkage operator
-prox_l1 = @(x, lambda) subplus(abs(x) - lambda) .* sign(x);
-
-% gradient
-Grad_fx = @(x) 2 * (A_square * x - A_transpose* b);
-
-%%
-%*******************************************************************
-% IGAHD algorithm part.
-%*******************************************************************
-
+% parse input options, get default values in case not configured
+[ step, lambda, maxiter, tol, verbose ] = parse_input_parameters(opts);
 
 % Global parameters of algorithm 
-lambda = 0.001;
-step_size = 0.01;
-step = step_size ^ 2;
-%step = 1 / L;
-number_iterations = 1000;
+%step = h ^ 2;
 
 % damping coefficients (initial values taken as example from page 3.)
 alpha = 3.1; % viscous 
+%beta = 2*sqrt(step)*0.9; % Hessian-driven : b<2*sqrt(s)
 beta = 0.02; % Hessian-driven : b<2*sqrt(s)
-%beta = 0;
+b_k = 1.0;
 
 fprintf('=====================================================\n')
-fprintf(' Algorithm parameters:')
-fprintf([' lambda: %f\n',...
-         ' L     : %f\n',...
-         ' step  : %f\n',...
-         ' alpha : %f\n'],...
-          lambda, L, step, alpha );
+fprintf(' IGAHD:Inertial Gradient Algorithm with Hessian Damping\n')
 fprintf('=====================================================\n')
+fprintf(' lambda:%g\n step:%g\n alpha:%g\n beta:%g\n b:%g\n',... 
+          lambda, step, alpha, beta, b_k);
+
+% initialize arrays 
+fx_k = zeros(1,maxiter); % objective function values
+errors = zeros(4,maxiter);% array to keep criteria errors
+x1x2 = zeros(2,maxiter) ; 
+ix1 = opts.ix1; ix2 = opts.ix2 ;
+
+% initialize
+x_k = x_0; x_prev = x_0; k = 1; ndiff = inf; x_100 = x_0;
 
 
-% init with blurred image
-x_k = b; 
-x_prev = b;
-
-
-% vector with values of the objective function
-fval = zeros(1,number_iterations+1);
-fval(1) = f_obj(A,x_k,b,lambda);
-
-% f_obj(x_min): function evaluated with the true image
-fx_min = f_obj(A,x,b,lambda);
-total_elapsed = 0;
-
-% main loop of the ipahd algorithm
-for k=1:number_iterations
-    
-    tic; 
-    
+tic;
+% ipahd-ns main loop
+while and(ndiff>=tol, k <= maxiter)
+  
+    % mu_k setup
     alpha_k = 1 - alpha/k;
     
-    % derivative part
-    Dfx_k = alpha_k .* (x_k - x_prev);
+    % momentum part
+    M_k = alpha_k .* (x_k - x_prev);
     
-    % Hessian part. See P.10 
-    Hfx_k = beta * sqrt(step)* (Grad_fx(x_k) - Grad_fx(x_prev));
+    % Hessian part. See Attouch-Fadili-Riah p.10 
+    H_k = beta * sqrt(step) * (grad_fx(x_k) - grad_fx(x_prev));
     
-    % gradient
-    Gfx_k = beta * sqrt(step) * (1/k) * Grad_fx(x_prev) ;
+    % gradient previous iteration
+    G_k = beta * sqrt(step) * (1/k) * grad_fx(x_prev) ;
     
-    y_k = x_k + Dfx_k - Hfx_k - Gfx_k;
+    % intermediate step
+    y_k = x_k + M_k - H_k - G_k;
     
     % final step
-    x_next = y_k - step * Grad_fx(y_k);
+    x_next = y_k - step * grad_fx(y_k);
+    
+    %--------------------------------------------------
+    % end algorithm update
+    %--------------------------------------------------
+    
+    % function value for current iteration
+    fx_k(k) = cost_fx(x_next,lambda);
+    
+    % get criteria error for stoppping algorithm 
+    [ ndiff, errors([1 2 3 4], k) ] = stop_criteria_value( 'norm2', x_next, x_k );
 
-    elapsed = toc;
-    total_elapsed = total_elapsed + elapsed ;
-    err_2 = norm(x_next - x_prev)/norm(x_prev);
-    err_1 = norm(x_next - x_prev,1)/numel(x_next);
+    % update
+    x_prev = x_k; x_k = x_next;
+ 
+    % save optimization value at iteration 100
+    if k == 100, x_100 = x_next; end
     
-    % updating
-    x_prev = x_k;
-    x_k = x_next;
+    % save evolution of two variables (just for debugging)
+    x1x2([1 2],k) = x_next([ix1 ix2]);
     
-    % comparing values of the objective function
-    fval(k+1) = f_obj(A,x_k,b,lambda);
-    ftol = fval(k) - fval(k+1);
-    
-    if mod(k,10) == 0
-    fprintf('%d fobj=%f ftol=%.9f err_1=%3.3e err_2=%3.3e %3.3e\n', ...
-    k, fval(k+1), ftol, err_1, err_2, elapsed )    
+    % display messages every 10 iterations.
+    if and(mod(k-1,10) == 0, verbose  )
+        fprintf('%d cost = %.5s error = %1.6e\n', k, fx_k(k), ndiff);
     end
-    % Save vector of iteration 100
-    if k == 100 
-        x_100 = x_next;
-    end
+    k = k + 1;
+    % show progress
+    progressbar( maxiter, k, verbose )    
 
-
-  %if abs(ftol) < 1e-4
-  %    break;
-  %end
 end
-
-prImg = reshape(x_k,size(img));
-figure(1); imshow(im2uint8(prImg));title('Recovered');
-
-fx_min = f_obj(A,x,b,lambda);
-figure(2);
-vals = fval-fx_min ;
-results = vals(vals > 0) ;
-
-loglog(results);
-ylabel('${f(x_k)-f(x^{*})}$','interpreter','latex', 'FontWeight','bold')
-xlabel('${k}$','interpreter','latex', 'FontWeight','bold')
-title('${l_1}$','interpreter','latex', 'FontWeight','bold')
-legend({'IGAHD'},'Location','northeast')
-grid on;
+fprintf('\n');
 
 
+
+% save most of configuration parameters in a cell
+resp = { 'igahd' toc k lambda step tol ndiff  errors(2,end) };
+
+% save useful files
+nameStr = mfilename;
+if ~exist(nameStr, 'dir'), mkdir(nameStr); end
+save(strcat(nameStr,'/errors'),'errors');
+save(strcat(nameStr,'/x1x2'),'x1x2');
+save(strcat(nameStr,'/fx_k'),'fx_k');
+
+writetable(struct2table(opts), strcat(nameStr,'/opts.txt'));
+
+
+end

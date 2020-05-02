@@ -1,101 +1,78 @@
-function [ fx_vals, x_100, x_next, resp ] = ista( A, b, x_true, x_0, opts )
+function [ fx_k, x_100, x_next, resp ] = ista( grad_fx, cost_fx, x_0, opts )
 %Implementation of ISTA algorithm
 
 
-% set default parameters in case no given arguments.
-if nargin == 0
-    [A, b, x_true, x_0, opts] = default_parameters();
-end
-
 % parse input options, get default values in case not configured
-[ t_k, lambda, maxiter, tol, verbose ] = parse_input_parameters(opts);
+[ step, lambda, maxiter, tol, verbose ] = parse_input_parameters(opts);
 
 % console message.
 fprintf('=====================================================\n')
 fprintf(' ISTA: Iterative Shrinkage-Thresholding Algorithm\n')
 fprintf('=====================================================\n')
 fprintf(' Algorithm parameters:\n')
-fprintf([' lambda: %1.3f\n',...
-         ' step  : %1.3f\n'],...
-          lambda, t_k);
-
-% get matrices
-A_transpose = A';
-A_square = A' * A;
-
-% gradient
-grad_fx = @(x) (A_square * x - A_transpose * b);
-
-% compute ||b|| only once
-normb = norm(b); 
-
+fprintf([' lambda: %g\n',...
+         ' step  : %g\n'],...
+          lambda, step);
+      
 % initialize arrays 
-ista_errors = zeros(4,maxiter);    % save some error as a stop criteria 
-fx_vals = zeros(1,maxiter);        % objective function values
+fx_k = zeros(1,maxiter);  % objective function values
+errors = zeros(4,maxiter);% array to keep stop criteria errors
+x1x2 = zeros(2,maxiter) ; 
+ix1 = opts.ix1; ix2 = opts.ix2 ;
 
-% initialize
-x_k = x_0; niter = 0; ndiff = inf; 
-
-% init function value
-fx_k = lasso_function(A,x_k,b,lambda);
-
-% true value of the objective function
-fx_star = lasso_function(A,x_true,b,lambda); 
+% initialize algorithm variables
+x_k = x_0; niter = 0; ndiff = inf; x_100 = x_0;
 
 tic; 
 % main loop
 while and(ndiff>=tol, niter < maxiter)
 
     % gradient step
-    %x_grad = x_k - 2 * t_k .* (A_square * x_k - A_transpose* b);
-    x_grad = x_k - 2 * t_k .* grad_fx(x_k);
+    x_grad = x_k - step .* grad_fx(x_k);
 
     % soft thresholding
-    %x_next = subplus(abs(x_grad) - lambda * t_k) .* sign(x_grad);
-    x_next = prox_l1(x_grad,lambda * t_k);
+    x_next = prox_l1(x_grad,lambda * step);
 
-    
-    % function value for current iteration
-    cost = lasso_function(A,x_next,b,lambda);
-    
-    % norm of the residual using x_k
-    normr = norm(b - A*x_k);           % Save for printing
-    if normr/normb < tol, break; end
-    
-    % error difference with previous values 
-    ista_errors(1,niter+1) = norm(x_next - x_k)     /norm(x_k);
-    ista_errors(2,niter+1) = norm(x_next - x_k,1)   /numel(x_k);
-    ista_errors(3,niter+1) = norm(x_next - x_true,1)/norm(x_true,1);
-    ista_errors(4,niter+1) = normr/normb ; 
-    
-    % display by console every 50 iterations
-    if and(mod(niter,10) == 0, verbose )
-        fprintf('%d cost = %.5s error = %1.6e\n', niter, cost, ista_errors(1,niter+1));
-    end
-    
-    % update function vals 
-    fx_k = cost;
-    fx_vals(niter+1) = fx_k;
-    ndiff = ista_errors(1,niter+1);
-
-    % update
-    x_k = x_next;
+    % update counter
     niter = niter + 1;
     
-    % Save vector of iteration 100
-    if niter == 100 
-        x_100 = x_next;
+    % function value for current iteration
+    fx_k(niter) = cost_fx(x_next,lambda);
+    
+    % get criteria error for stoppping algorithm 
+    [ ndiff, errors([1 2 3 4], niter) ] = stop_criteria_value( 'norm2', x_next, x_k );
+    
+    % update
+    x_k = x_next ;
+    
+    % save optimization value at iteration 100
+    if niter == 100, x_100 = x_next; end
+    
+    % save evolution of two variables (just for debugging)
+    x1x2([1 2],niter) = x_next([ix1 ix2]);
+    
+    % display messages every 10 iterations.
+    if and(mod(niter-1,10) == 0, verbose  )
+        fprintf('%d cost = %.5s error = %1.6e\n', niter, fx_k(niter), ndiff);
     end
     
-    if and(mod(niter,floor(maxiter*0.02)) == 0, ~verbose )
-        fprintf('.');
-    end
-
+    % show progress
+    progressbar( maxiter, niter, verbose )
+    
 end
+fprintf('\n');
+    
+% save most of configuration parameters in a cell
+resp = { 'ista' toc niter lambda step tol ndiff  errors(2,end) };
 
-resp = { 'ista' toc niter tol ndiff normr normb normr/normb };
+% save useful files
+nameStr = mfilename;
+if ~exist(nameStr, 'dir'), mkdir(nameStr); end
+save(strcat(nameStr,'/errors'),'errors');
+save(strcat(nameStr,'/x1x2'),'x1x2');
+save(strcat(nameStr,'/fx_k'),'fx_k');
 
-save('ista_errors','ista_errors');
+writetable(struct2table(opts), strcat(nameStr,'/opts.txt'));
 
 end
 
